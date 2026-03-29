@@ -1,3 +1,4 @@
+import io
 import sys
 import os
 import qrcode
@@ -55,7 +56,32 @@ def get_output_path():
     return path
 
 
-def generate_qr(text, image_path=None, output_path="output_qr.png"):
+def get_compress_level():
+    """Prompt user for PNG compression level."""
+    print("\nPNG compression level (all levels are lossless):")
+    print("  0 = no compression (largest file, fastest)")
+    print("  6 = default")
+    print("  9 = max compression (smallest file, slowest)")
+    choice = input("Choose [0-9] (default: 6): ").strip()
+    if not choice:
+        return 6
+    if not choice.isdigit() or int(choice) > 9:
+        print("Invalid choice, using default (6).")
+        return 6
+    return int(choice)
+
+
+def format_size(size_bytes):
+    """Format byte count as a human-readable string."""
+    if size_bytes < 1024:
+        return f"{size_bytes} B"
+    elif size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.1f} KB"
+    else:
+        return f"{size_bytes / (1024 * 1024):.2f} MB"
+
+
+def generate_qr(text, image_path=None, output_path="output_qr.png", compress_level=6):
     """Generate a QR code, optionally embedding an image in the center."""
     # Use high error correction when embedding an image so the QR stays scannable
     error_correction = ERROR_CORRECT_H if image_path else ERROR_CORRECT_M
@@ -74,19 +100,33 @@ def generate_qr(text, image_path=None, output_path="output_qr.png"):
     if image_path:
         logo = Image.open(image_path).convert("RGBA")
 
-        # Resize logo to fit within ~25% of the QR code area (safe for scanning)
+        # Scale QR up so the logo fits at original resolution within 25% of QR area.
+        # This preserves full logo quality instead of downscaling it.
         qr_width, qr_height = img.size
-        max_logo_size = int(qr_width * 0.25)
-        logo_ratio = min(max_logo_size / logo.width, max_logo_size / logo.height)
-        new_size = (int(logo.width * logo_ratio), int(logo.height * logo_ratio))
-        logo = logo.resize(new_size, Image.LANCZOS)
+        min_qr_size = int(max(logo.width, logo.height) / 0.25)
 
-        # Center the logo on the QR code
+        if min_qr_size > max(qr_width, qr_height):
+            img = img.resize((min_qr_size, min_qr_size), Image.NEAREST)
+            qr_width, qr_height = img.size
+
+        # Center the logo on the QR code at original resolution
         pos = ((qr_width - logo.width) // 2, (qr_height - logo.height) // 2)
         img.paste(logo, pos, logo)
 
-    img.save(output_path)
-    print(f"\nQR code saved to: {output_path}")
+    # Estimate file size by writing to memory first
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", compress_level=compress_level)
+    file_size = buf.tell()
+    print(f"\nEstimated file size: {format_size(file_size)}")
+
+    confirm = input("Save? [Y/n]: ").strip().lower()
+    if confirm in ("n", "no"):
+        print("Aborted.")
+        return
+
+    with open(output_path, "wb") as f:
+        f.write(buf.getvalue())
+    print(f"QR code saved to: {output_path}")
 
 
 def main():
@@ -95,8 +135,9 @@ def main():
     text = get_text_input()
     image_path = get_image_input()
     output_path = get_output_path()
+    compress_level = get_compress_level()
 
-    generate_qr(text, image_path, output_path)
+    generate_qr(text, image_path, output_path, compress_level)
 
 
 if __name__ == "__main__":
